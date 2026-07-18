@@ -3,9 +3,9 @@ from dataclasses import dataclass
 import csv
 
 # --- Scoring weights (the "recipe") ---
-GENRE_WEIGHT = 2.0      # exact genre match
-MOOD_WEIGHT = 1.0       # exact mood match (half of genre)
-ENERGY_WEIGHT = 1.5     # max points for a perfect energy match, scaled by closeness
+GENRE_WEIGHT = 1.0      # exact genre match (halved from 2.0 in the weight-shift experiment)
+MOOD_WEIGHT = 1.0       # exact mood match
+ENERGY_WEIGHT = 3.0     # max points for a perfect energy match, scaled by closeness (doubled from 1.5)
 ACOUSTIC_WEIGHT = 0.5   # bonus/penalty nudge based on the user's acoustic preference
 
 @dataclass
