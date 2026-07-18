@@ -1,67 +1,63 @@
 # 🎧 Model Card: Music Recommender Simulation
 
-## 1. Model Name  
+## 1. Model Name
 
-Give your model a short, descriptive name.  
-Example: **VibeFinder 1.0**  
+**VibeFinder 1.0**
 
----
-
-## 2. Intended Use  
-
-Describe what your recommender is designed to do and who it is for. 
-
-Prompts:  
-
-- What kind of recommendations does it generate  
-- What assumptions does it make about the user  
-- Is this for real users or classroom exploration  
+TuneMatch
 
 ---
 
-## 3. How the Model Works  
+## 2. Intended Use
 
-Explain your scoring approach in simple language.  
+TuneMatch suggests songs from a small catalog. You give it your taste. It gives you a ranked list back.
 
-Prompts:  
-
-- What features of each song are used (genre, energy, mood, etc.)  
-- What user preferences are considered  
-- How does the model turn those into a score  
-- What changes did you make from the starter logic  
-
-Avoid code here. Pretend you are explaining the idea to a friend who does not program.
+- It picks songs that fit your favorite genre, mood, and energy level.
+- It assumes you can name your taste in simple words (like "pop" or "chill").
+- It is built for a classroom project, not for real users. It is a demo, not a product.
 
 ---
 
-## 4. Data  
+## 3. How the Model Works
 
-Describe the dataset the model uses.  
+Think of it like a points game. Every song starts with zero points.
 
-Prompts:  
+- A song earns points if its genre matches what you like.
+- It earns more points if its mood matches too.
+- It earns points for being close to the energy level you want. Closer means more points.
+- It can earn a small bonus if you like acoustic songs and the song is acoustic.
 
-- How many songs are in the catalog  
-- What genres or moods are represented  
-- Did you add or remove data  
-- Are there parts of musical taste missing in the dataset  
+We add up the points for each song. Then we sort the songs from most points to least. The top ones become your recommendations. Each pick also comes with a short "why" so you can see the reasons.
+
+We changed two things from the starter code. First, we wrote the real scoring rules (the starter just returned the first few songs). Second, we ran an experiment: we made energy count more and genre count less, to see how the list changes.
 
 ---
 
-## 5. Strengths  
+## 4. Data
 
-Where does your system seem to work well  
+The catalog is a small CSV file of songs.
 
-Prompts:  
+- It has 17 songs.
+- Genres include pop, lofi, rock, jazz, ambient, hip hop, classical, reggae, metal, country, edm, and folk.
+- Moods include happy, chill, intense, relaxed, sad-ish tones, and more.
+- We added 7 new songs to the 10 that came with the starter. We picked genres and moods that were missing.
+- A lot of taste is still missing. There is only one song for most genres. Many world music styles, languages, and eras are not here at all.
 
-- User types for which it gives reasonable results  
-- Any patterns you think your scoring captures correctly  
-- Cases where the recommendations matched your intuition  
+---
+
+## 5. Strengths
+
+The system works well when a user has a clear, common taste.
+
+- It gives good results for mainstream profiles like "pop and happy" or "chill lofi." The top pick usually feels right.
+- It captures the idea that genre and mood matter, and that energy should feel close to what you want.
+- The results matched my intuition in testing. A high-energy pop user got upbeat pop. A chill lofi user got quiet, acoustic songs. The reasons shown for each pick made sense.
 
 ---
 
 ## 6. Limitations and Bias
 
-The clearest weakness I found is an **energy-gap filter bubble** that quietly favors
+The clearest weakness I found was an energy-gap filter bubble that quietly favors
 average listeners over extreme ones. Energy is scored as `weight * (1 - |song.energy -
 target|)`, and after the weight-shift experiment energy is the single heaviest signal
 (3.0 points vs. 1.0 for genre), so how close a song sits to the target energy now
@@ -367,25 +363,23 @@ Each pair below contrasts the top-5 outputs and explains why the difference make
 
 ---
 
-## 8. Future Work  
+## 8. Future Work
 
-Ideas for how you would improve the model next.  
+Here is what I would do next.
 
-Prompts:  
-
-- Additional features or preferences  
-- Better ways to explain recommendations  
-- Improving diversity among the top results  
-- Handling more complex user tastes  
+- Use more song features. Right now tempo, valence, and danceability are ignored. I would add them.
+- Fix the energy bug. I would clamp the energy score so it never goes negative.
+- Handle missing matches. If the catalog has no k-pop, tell the user instead of staying quiet.
+- Add more songs. A bigger, more even catalog would help niche tastes.
+- Improve variety. I would stop the list from filling up with near-identical mid-energy songs.
+- Let users rank what matters most to them (genre vs mood vs energy).
 
 ---
 
-## 9. Personal Reflection  
+## 9. Personal Reflection
 
-A few sentences about your experience.  
+This project made recommenders feel less like magic. It is really just points and sorting.
 
-Prompts:  
+I learned that the weights matter a lot. When I doubled the energy weight, the whole list changed. Small choices by the builder shape what users see.
 
-- What you learned about recommender systems  
-- Something unexpected or interesting you discovered  
-- How this changed the way you think about music recommendation apps  
+The surprising part was the edge cases. A weird input like energy 2.0 broke the math in a quiet way. That made me realize how easy it is for bias or bugs to hide inside a simple rule. Now I think about apps like Spotify differently. Someone chose those rules, and those choices decide what millions of people hear.
