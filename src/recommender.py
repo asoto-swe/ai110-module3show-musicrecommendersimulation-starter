@@ -8,6 +8,55 @@ MOOD_WEIGHT = 1.0       # exact mood match
 ENERGY_WEIGHT = 3.0     # max points for a perfect energy match, scaled by closeness (doubled from 1.5)
 ACOUSTIC_WEIGHT = 0.5   # bonus/penalty nudge based on the user's acoustic preference
 
+# --- Diversity penalties ---
+# Applied while building the top-k list: each time a song's artist (or genre) is
+# already present in the songs picked so far, we subtract this many points. This
+# keeps the top results from being dominated by one artist or one genre.
+ARTIST_PENALTY = 2.0    # per song already chosen from the same artist
+GENRE_PENALTY = 0.75    # per song already chosen from the same genre
+
+
+def _diversity_rerank(entries: List[Dict], k: int) -> List[Tuple]:
+    """
+    Greedily pick k songs, penalizing any whose artist or genre already appears
+    in the picks so far. Each entry is a dict with keys: item, base, reasons,
+    artist, genre. Returns a list of (item, final_score, reasons) tuples.
+    """
+    # Sort by base score first so ties during selection break toward the higher raw score.
+    remaining = sorted(entries, key=lambda e: e["base"], reverse=True)
+    chosen: List[Tuple] = []
+    artist_counts: Dict[str, int] = {}
+    genre_counts: Dict[str, int] = {}
+
+    while remaining and len(chosen) < k:
+        best = None
+        best_index = 0
+        best_adjusted = None
+        best_penalty = (0.0, 0.0)
+        for index, entry in enumerate(remaining):
+            artist_pen = ARTIST_PENALTY * artist_counts.get(entry["artist"], 0)
+            genre_pen = GENRE_PENALTY * genre_counts.get(entry["genre"], 0)
+            adjusted = entry["base"] - artist_pen - genre_pen
+            if best_adjusted is None or adjusted > best_adjusted:
+                best_adjusted = adjusted
+                best = entry
+                best_index = index
+                best_penalty = (artist_pen, genre_pen)
+
+        remaining.pop(best_index)
+        artist_pen, genre_pen = best_penalty
+        reasons = list(best["reasons"])
+        if artist_pen > 0:
+            reasons.append(f"diversity: repeat artist (-{artist_pen:.2f})")
+        if genre_pen > 0:
+            reasons.append(f"diversity: repeat genre (-{genre_pen:.2f})")
+
+        chosen.append((best["item"], best_adjusted, reasons))
+        artist_counts[best["artist"]] = artist_counts.get(best["artist"], 0) + 1
+        genre_counts[best["genre"]] = genre_counts.get(best["genre"], 0) + 1
+
+    return chosen
+
 @dataclass
 class Song:
     """
@@ -59,8 +108,9 @@ class Recommender:
             score += MOOD_WEIGHT
             reasons.append(f"mood match: {song.mood} (+{MOOD_WEIGHT:.1f})")
 
-        # Energy — gradient: closer to the target earns more points
-        energy_closeness = 1.0 - abs(song.energy - user.target_energy)
+        # Energy — gradient: closer to the target earns more points.
+        # Clamp closeness to [0, 1] so an out-of-range target can't push points negative.
+        energy_closeness = max(0.0, min(1.0, 1.0 - abs(song.energy - user.target_energy)))
         energy_points = ENERGY_WEIGHT * energy_closeness
         score += energy_points
         reasons.append(
@@ -81,13 +131,20 @@ class Recommender:
         return score, reasons
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
-        """Return the top-k Songs ranked by score for the given user."""
-        ranked = sorted(
-            self.songs,
-            key=lambda song: self._score(user, song)[0],
-            reverse=True,
-        )
-        return ranked[:k]
+        """Return the top-k Songs, ranked by score and spread out by the diversity penalty."""
+        entries = []
+        for song in self.songs:
+            base, reasons = self._score(user, song)
+            entries.append({
+                "item": song,
+                "base": base,
+                "reasons": reasons,
+                "artist": song.artist,
+                "genre": song.genre,
+            })
+
+        ranked = _diversity_rerank(entries, k)
+        return [song for song, _score, _reasons in ranked]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         """Return a human-readable score-and-reasons string for one song."""
@@ -145,7 +202,8 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     # Energy — gradient: closer to the target earns more points
     target_energy = user_prefs.get("energy")
     if target_energy is not None:
-        energy_closeness = 1.0 - abs(song.get("energy", 0.0) - target_energy)
+        # Clamp closeness to [0, 1] so an out-of-range target can't push points negative.
+        energy_closeness = max(0.0, min(1.0, 1.0 - abs(song.get("energy", 0.0) - target_energy)))
         energy_points = ENERGY_WEIGHT * energy_closeness
         score += energy_points
         reasons.append(
@@ -169,15 +227,23 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
 
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
     """
-    Scores and ranks songs, returning the top k.
+    Scores songs, applies the diversity penalty, and returns the top k.
     Each item is (song_dict, score, explanation).
     Required by src/main.py
     """
-    scored: List[Tuple[Dict, float, str]] = []
+    entries: List[Dict] = []
     for song in songs:
-        score, reasons = score_song(user_prefs, song)
-        explanation = "; ".join(reasons) if reasons else "no strong matches"
-        scored.append((song, score, explanation))
+        base, reasons = score_song(user_prefs, song)
+        entries.append({
+            "item": song,
+            "base": base,
+            "reasons": reasons,
+            "artist": song.get("artist", ""),
+            "genre": song.get("genre", ""),
+        })
 
-    scored.sort(key=lambda item: item[1], reverse=True)
-    return scored[:k]
+    ranked = _diversity_rerank(entries, k)
+    return [
+        (song, final_score, "; ".join(reasons) if reasons else "no strong matches")
+        for song, final_score, reasons in ranked
+    ]
