@@ -2,16 +2,14 @@
 
 ## Project Summary
 
-In this project you will build and explain a small music recommender system.
-
-Your goal is to:
+This project builds and explains a small music recommender system. The goals were to:
 
 - Represent songs and a user "taste profile" as data
 - Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
+- Evaluate what the system gets right and wrong
+- Reflect on how this mirrors real-world AI recommenders
 
-Replace this paragraph with your own summary of what your version does.
+My version is a small, explainable recommender called **TuneMatch**. You describe your taste as a simple profile — a favorite genre, a mood, a target energy level, and whether you like acoustic music — and it scores every song in a 17-song catalog against that profile. It then returns a ranked top-5 list, and for each pick it shows exactly why the song was chosen (which features matched and how many points each was worth). There's no machine learning here on purpose: the whole point was to build something I could fully explain, then poke at it to see where it's biased or breaks.
 
 ---
 
@@ -41,41 +39,54 @@ Real-world recommenders (Spotify, YouTube, Netflix) learn from massive amounts o
 
 ### Scoring, in plain language
 
-The `Recommender` compares each `Song` to the `UserProfile` feature by feature, adds up weighted points for matches (exact matches on genre/mood, closeness on energy, a bonus/penalty for acousticness), and returns the top `k` highest-scoring songs. Each recommendation also comes with a short explanation listing which features drove its score.
+The `Recommender` compares each `Song` to the `UserProfile` feature by feature, adds up weighted points for matches (exact matches on genre/mood, closeness on energy, a bonus/penalty for acousticness), and builds the top `k` list. It doesn't just sort once and slice, though — it picks songs one at a time and applies a **diversity penalty** so the list doesn't fill up with the same artist or genre (more on that below). Each recommendation comes with a short explanation listing which features drove its score, including any penalty that was applied.
 
-### Algorithm Recipe (finalized)
+### Algorithm Recipe (current)
 
-The weights are deliberately ranked so that **genre anchors** the result while **mood and energy break ties**. All weights live as named constants in [`recommender.py`](src/recommender.py) so they're easy to tune during experiments.
+These are the weights the code uses today, after the experiments described further down. They live as named constants at the top of [`recommender.py`](src/recommender.py) so they're easy to tune.
 
 | Feature | Rule | Points |
 | --- | --- | --- |
-| Genre | Exact match with `favorite_genre` | **+2.0** |
+| Genre | Exact match with `favorite_genre` | **+1.0** |
 | Mood | Exact match with `favorite_mood` | **+1.0** |
-| Energy | Closeness to `target_energy`: `1.5 × (1 − |song.energy − target_energy|)` | **0.0 to +1.5** |
+| Energy | Closeness to `target_energy`: `3.0 × (1 − |song.energy − target_energy|)`, clamped to `[0, 1]` | **0.0 to +3.0** |
 | Acousticness | If `likes_acoustic`: `+0.5 × acousticness`; else `−0.5 × acousticness` | **−0.5 to +0.5** |
 
-**Maximum possible score = 5.0** (2.0 + 1.0 + 1.5 + 0.5).
+**Maximum possible score = 5.5** (1.0 + 1.0 + 3.0 + 0.5).
+
+On top of the raw score, a **diversity penalty** is applied while the top-k list is being built, so no single artist or genre takes over:
+
+| Penalty | When | Points |
+| --- | --- | --- |
+| Repeat artist | The song's artist is already in the list so far | **−2.0 per repeat** |
+| Repeat genre | The song's genre is already in the list so far | **−0.75 per repeat** |
 
 In pseudocode:
 
 ```
+# 1. score every song
 score = 0
-if song.genre == user.favorite_genre:  score += 2.0
+if song.genre == user.favorite_genre:  score += 1.0
 if song.mood  == user.favorite_mood:   score += 1.0
-score += 1.5 * (1 - abs(song.energy - user.target_energy))   # energy closeness
+closeness = clamp(1 - abs(song.energy - user.target_energy), 0, 1)
+score += 3.0 * closeness
 score += 0.5 * song.acousticness  if user.likes_acoustic  else  -0.5 * song.acousticness
+
+# 2. build the top-k greedily, subtracting diversity penalties for repeats
+for each slot:
+    pick the highest-scoring remaining song after subtracting
+        2.0 * (times its artist already chosen)
+      + 0.75 * (times its genre already chosen)
 ```
 
-Then sort all songs by `score` (highest first) and return the top `k`.
-
-**Why these numbers:** genre is the strongest identity signal ("I'm into indie"), so it carries the most weight; mood is real but fuzzier and subjective, so it's worth half of genre; energy is a continuous value, so it's scored as a *gradient* (closer = more points) rather than a hard match; acousticness is a simple preference toggle, so it only nudges the ranking.
+**Why these numbers:** I started with genre as the anchor (+2.0) and energy as a tie-breaker (+1.5), but after experimenting I flipped it — energy is now the heaviest signal because "how energetic do I want this to feel" turned out to separate songs more usefully than a genre label. Mood stays a flat +1.0, and acousticness is just a small nudge. The energy closeness is clamped so a nonsense target (like `2.0`) can't drive the score negative. The diversity penalty is deliberately harsher on repeat artists (−2.0) than repeat genres (−0.75), since hearing the same artist twice in a five-song list feels worse than hearing two songs of the same genre.
 
 ### Potential biases I expect
 
-- **Genre over-prioritization.** Because a genre match (+2.0) outweighs a mood match (+1.0), the system can bury a song that perfectly fits the user's mood just because its genre label differs. Great cross-genre matches may never surface.
-- **Popularity/exact-label bias.** Matching is exact-string, so `"indie"` ≠ `"indie pop"` and near-miss genres score zero. This favors songs whose labels happen to match the catalog's vocabulary and penalizes anything tagged inconsistently.
-- **Middle-energy penalty for extreme tastes.** The energy gradient rewards songs near the target, so a user who wants very high or very low energy gets a narrower slice of the catalog than a user near the middle.
-- **Unused signals.** `tempo_bpm`, `valence`, and `danceability` exist on each `Song` but the profile has no matching preference, so they don't influence recommendations yet — potentially good matches on those dimensions are ignored.
+- **Energy dominates everything.** After the weight shift, energy is worth up to +3.0 while genre and mood are only +1.0 each. That means a song sitting on your target energy can beat a genuine genre match that's slightly off-energy. The "safe middle" of the catalog (songs around 0.5–0.6 energy) is close to almost everyone's target, so those songs surface for a lot of different users — a classic filter-bubble effect.
+- **Exact-label bias.** Matching is exact-string, so `"indie"` ≠ `"indie pop"` and near-miss genres/moods score zero. This favors songs whose labels happen to match the catalog's vocabulary and quietly penalizes anything tagged differently.
+- **Extreme tastes get less.** Because most of the catalog clusters mid-energy, a user who wants very high or very low energy has fewer strong matches than someone in the middle.
+- **Unused signals.** `tempo_bpm`, `valence`, and `danceability` exist on each `Song` but the profile has no matching preference, so they don't influence recommendations at all yet.
 - **Cold-start / thin catalog.** With a tiny hand-built catalog and a hand-entered profile, the system reflects whatever assumptions went into that data rather than real listening behavior.
 
 ---
@@ -117,37 +128,38 @@ You can add more tests in `tests/test_recommender.py`.
 
 ## Sample Recommendation Output
 
-Running `python -m src.main` against the default **pop / happy / 0.8-energy** profile produces:
+`python -m src.main` runs the recommender against several built-in profiles. Here's the first one, a **High-Energy Pop** listener (`genre=pop, mood=happy, energy=0.9`):
 
 ```
 Loaded songs: 17
 
 ============================================================
-  MUSIC RECOMMENDER
-  Profile: genre=pop, mood=happy, energy=0.8
+  PROFILE: High-Energy Pop
+  Prefs: genre='pop', mood='happy', energy=0.9
 ============================================================
 
-1. Sunrise City - Neon Echo   (score 4.47)
-     - genre match: pop (+2.0)
+1. Sunrise City - Neon Echo   (score 4.76)
+     - genre match: pop (+1.0)
      - mood match: happy (+1.0)
-     - energy 0.82 vs target 0.80 (+1.47)
+     - energy 0.82 vs target 0.90 (+2.76)
 
-2. Gym Hero - Max Pulse   (score 3.30)
-     - genre match: pop (+2.0)
-     - energy 0.93 vs target 0.80 (+1.30)
-
-3. Rooftop Lights - Indigo Parade   (score 2.44)
+2. Rooftop Lights - Indigo Parade   (score 3.58)
      - mood match: happy (+1.0)
-     - energy 0.76 vs target 0.80 (+1.44)
+     - energy 0.76 vs target 0.90 (+2.58)
 
-4. Night Drive Loop - Neon Echo   (score 1.42)
-     - energy 0.75 vs target 0.80 (+1.42)
+3. Gym Hero - Max Pulse   (score 3.16)
+     - genre match: pop (+1.0)
+     - energy 0.93 vs target 0.90 (+2.91)
+     - diversity: repeat genre (-0.75)
 
-5. Pulse Reactor - Circuit Halo   (score 1.36)
-     - energy 0.89 vs target 0.80 (+1.36)
+4. Storm Runner - Voltline   (score 2.97)
+     - energy 0.91 vs target 0.90 (+2.97)
+
+5. Pulse Reactor - Circuit Halo   (score 2.97)
+     - energy 0.89 vs target 0.90 (+2.97)
 ```
 
-The top result, *Sunrise City*, is the only song that matches genre **and** mood while sitting almost exactly on the target energy — exactly what we'd expect for this profile.
+*Sunrise City* wins easily — it's the only song matching genre **and** mood while sitting right on the target energy. The interesting bit is #2 vs #3: `Gym Hero` actually has a higher raw score than `Rooftop Lights`, but it's a second pop song, so the diversity penalty (`repeat genre -0.75`) knocks it below the mood-matched `Rooftop Lights`. That's the diversity rule doing its job — keeping the list from turning into an all-pop block.
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or demo video link here -->
 
@@ -155,25 +167,23 @@ The top result, *Sunrise City*, is the only song that matches genre **and** mood
 
 ## Experiments You Tried
 
-Use this section to document the experiments you ran. For example:
+**1. Weight shift — doubled energy, halved genre.** I started with genre as the anchor (+2.0) and energy as a tie-breaker (+1.5). Then I flipped it: genre down to +1.0, energy up to +3.0. The rankings noticeably changed — songs that just matched a genre label but felt "off" energy-wise dropped, and songs that sat right on the target energy climbed, even across genres. It made the lists feel more like "the right vibe" and less like "everything tagged pop." It also made energy the dominant signal, which is a trade-off I document in the bias section.
 
-- What happened when you changed the weight on genre from 2.0 to 0.5
-- What happened when you added tempo or valence to the score
-- How did your system behave for different types of users
+**2. Diversity penalty.** Without it, a user's top 5 could be three songs by the same artist or four songs of one genre. I added a penalty applied while building the list: −2.0 for a repeat artist, −0.75 for a repeat genre, stacking per repeat. For the Chill Lofi profile this pushed a second LoRoom track out of the top 5 entirely and gave five different artists instead of a cluster.
+
+**3. Stress-testing weird profiles.** I ran adversarial profiles — a conflicting `sad` + high-energy user, an unknown genre (`kpop`), a blank profile, and an impossible `energy=2.0`. Most degraded gracefully (a missing genre/mood just scores 0 and the other signals take over). The `energy=2.0` case exposed a real bug: the energy math went negative and printed a broken `(+-0.33)` string. I fixed it by clamping energy closeness to `[0, 1]`. Full outputs and per-profile comparisons are in the [model card](model_card.md).
 
 ---
 
 ## Limitations and Risks
 
-Summarize some limitations of your recommender.
+A few honest limitations (I go deeper in the [model card](model_card.md)):
 
-Examples:
-
-- It only works on a tiny catalog
-- It does not understand lyrics or language
-- It might over favor one genre or mood
-
-You will go deeper on this in your model card.
+- **Tiny catalog.** Only 17 songs, and most genres have just one track. A niche taste gets one real match and then a list ranked by energy.
+- **No understanding of the music itself.** It only knows the numbers and labels in the CSV — no lyrics, no language, no actual audio.
+- **Energy can overpower taste.** Because energy is the heaviest weight, the mid-energy "safe middle" of the catalog gets recommended to lots of different users, which is a filter-bubble risk.
+- **Exact-match only.** `"indie"` and `"indie pop"` are treated as totally unrelated, so inconsistent tags silently cost songs points.
+- **Hand-entered data.** Both the catalog and the profiles are made up by me, so any bias in that data flows straight into the results.
 
 ---
 
@@ -183,10 +193,9 @@ Read and complete `model_card.md`:
 
 [**Model Card**](model_card.md)
 
-Write 1 to 2 paragraphs here about what you learned:
+The biggest thing I learned is that a "recommendation" is a lot less magical than it feels from the outside. Under the hood it's really just turning preferences into numbers, adding up points, and sorting. There's no understanding of the music happening — the system is only as smart as the features I decided to score and the weights I chose for them. Watching the rankings completely change when I doubled the energy weight drove that home: small, invisible decisions by whoever builds the system quietly decide what everyone sees.
 
-- about how recommenders turn data into predictions
-- about where bias or unfairness could show up in systems like this
+That's also where bias sneaks in. My recommender doesn't set out to be unfair, but it ends up favoring the middle of the catalog and punishing anything with an unusual genre label, just because of how I wrote the math and what data I happened to include. Nobody chose that on purpose — it fell out of the design. It made me think differently about apps like Spotify: behind the "for you" feeling, someone picked the features, the weights, and the training data, and those choices shape the taste of millions of people. Building even a tiny version made those hidden trade-offs feel real.
 
 
 
